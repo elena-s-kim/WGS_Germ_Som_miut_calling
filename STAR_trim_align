@@ -1,0 +1,32 @@
+#!/bin/bash
+#SBATCH -N 1
+#SBATCH -t 06-00:00:00 # Runtime in D-HH:MM 
+#SBATCH --cpus-per-task=64
+#SBATCH --mem=128g 
+##SBATCH --cluster=smp
+##SBATCH --partition=smp
+
+module load star/2.7.9a
+
+echo "Trimming and aligning with STAR"
+echo
+
+cd /ix/hosmanbeyoglu/DATA/mesothelioma_NCI
+
+for dir in */; do
+
+    cd $dir	
+ 
+	mkdir bams/
+    for file in trim/*.paired_R1.fastq.gz; do
+
+        STAR --runThreadN 63 \
+              --genomeDir /ix/hosmanbeyoglu/DATA/cite-seq/refdata-gex-GRCh38-2020-A/STAR_2.7.9 \
+               --readFilesIn <(zcat $file) <(zcat ${file%.paired_R1.fastq.gz}.paired_R2.fastq.gz)  \
+               --outFileNamePrefix bams/ \
+               --outSAMtype BAM SortedByCoordinate \
+               --quantMode GeneCounts 
+    done
+    cd ..
+
+done
