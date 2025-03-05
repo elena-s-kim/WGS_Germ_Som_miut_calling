@@ -1,0 +1,311 @@
+#bash
+"""
+@author: elena_s_kim
+Partially followed https://www.youtube.com/watch?v=iHkiQvxyr5c WGS Variant Calling: Variant calling with GATK - Part 1 | Detailed NGS Analysis Workflow by *Bioinformagician*
+"""
+# Data: WES of Mesothelioma 
+#Local run for one sample pair-end, normal vs tumor (4 sequences per patient)
+###################################################### VARIANT CALLING STEPS ############################################################
+# Define directories with making (mkdir) nessessary ones
+
+ref="/Users/elena_s_kim/Documents/Mesothelioma_iMac/__06.24_local_rerun/supporting_files/hg38/hg38.fa"
+reads="/Users/elena_s_kim/Documents/Mesothelioma_iMac/__08.12_local_rerun_62-63/VC/reads_62-63" #original *.gz pair-ended reads
+known_sites="/Users/elena_s_kim/Documents/Mesothelioma_iMac/__06.24_local_rerun/supporting_files/hg38/Homo_sapiens_assembly38.dbsnp138.vcf"
+#aligned_reads="/Users/elena_s_kim/Documents/Mesothelioma_iMac/__08.12_local_rerun_62-63/VC/aligned_reads_62-63"
+data="/Users/elena_s_kim/Documents/Mesothelioma_iMac/__08.12_local_rerun_62-63/VC/data_62-63"
+data="/Users/elena_s_kim/Documents/Mesothelioma_iMac/__06.24_local_rerun/VC/data_62-63"
+
+# -------------------
+# STEP 1: QC - Run fastqc 
+# -------------------
+echo "STEP 1: QC - Run fastqc"
+fastqc ${reads}/SRR18543962/Sample_MNH016_N1D_E_HGT7VBGXB_R1.fastq.gz -o{reads}/SRR18543962 #Normal, sample MNH016, R1
+fastqc ${reads}/SRR18543962/Sample_MNH016_N1D_E_HGT7VBGXB_R2.fastq.gz -o{reads}/SRR18543962 #Normal, sample MNH016, R2
+fastqc ${reads}/SRR18543963/Sample_MNH016_T1D_E_HGT7VBGXB_R1.fastq.gz -o{reads}/SRR18543963 #Tumor, sample MNH016, R1
+fastqc ${reads}/SRR18543963/Sample_MNH016_T1D_E_HGT7VBGXB_R2.fastq.gz -o{reads}/SRR18543963 #Tumor, sample MNH016, R2
+# See the FastQC *.html files with reports in the folder. No adaptors trimming required, quality looks okay.
+# Duplicates will be removed in the step 3
+# --------------------------------------
+# STEP 2: Map to reference using BWA-MEM
+# --------------------------------------
+echo "STEP 2: Map to reference using BWA-MEM"
+# BWA ((Burrow-Wheeler transformation) alignment) indexes reference genome, time consuming, generates indexed genome files, for instance "Finished constructing BWT in 710 iterations"
+bwa index ${ref}
+#BWA aligns the pair-end reads to the one “paired.sam” file: "<...>.normal.paired.sam" and "<...>.tumor.paired.sam"
+#time consuming step
+
+bwa mem -t 4 -R "@RG\tID:MNH016\tPL:ILLUMINA\tSM:SRR18543962" ${ref} ${reads}/SRR18543962/Sample_MNH016_N1D_E_HGT7VBGXB_R1.fastq.gz ${reads}/SRR18543962/Sample_MNH016_N1D_E_HGT7VBGXB_R2.fastq.gz > ${aligned_reads}/SRR18543962.normal.paired.sam
+
+bwa mem -t 4 -R "@RG\tID:MNH016\tPL:ILLUMINA\tSM:SRR18543963" ${ref} ${reads}/SRR18543963/Sample_MNH016_T1D_E_HGT7VBGXB_R1.fastq.gz ${reads}/SRR18543963/Sample_MNH016_T1D_E_HGT7VBGXB_R2.fastq.gz > ${aligned_reads}/SRR18543963.tumor.paired.sam
+
+#To see what have we got, use samtools functions
+#samtools view *.sam | less
+#samtools flagstat *.sam
+
+samtools view ${aligned_reads}/SRR18543962.normal.paired.sam | less #q to quit
+samtools flagstat ${aligned_reads}/SRR18543962.normal.paired.sam  
+
+samtools view ${aligned_reads}/SRR18543963.tumor.paired.sam | less
+samtools flagstat ${aligned_reads}/SRR18543963.tumor.paired.sam
+
+"""Troubleshooting"""
+
+ls -lh ${reads}/SRR18543962/Sample_MNH016_N1D_E_HGT7VBGXB_R1.fastq.gz
+ls -lh ${reads}/SRR18543962/Sample_MNH016_N1D_E_HGT7VBGXB_R2.fastq.gz
+
+bwa
+
+zcat ${reads}/SRR18543962/Sample_MNH016_N1D_E_HGT7VBGXB_R1.fastq.gz | head -4000 | gzip > test_R1.fastq.gz
+zcat ${reads}/SRR18543962/Sample_MNH016_N1D_E_HGT7VBGXB_R2.fastq.gz | head -4000 | gzip > test_R2.fastq.gz
+bwa mem -t 4 -R "@RG\tID:MNH016\tPL:ILLUMINA\tSM:SRR18543962" ${ref} test_R1.fastq.gz test_R2.fastq.gz > test.sam
+
+bwa mem -t 4 -R "@RG\tID:MNH016\tPL:ILLUMINA\tSM:SRR18543962" ${ref} ${reads}/SRR18543962/Sample_MNH016_N1D_E_HGT7VBGXB_R1.fastq.gz ${reads}/SRR18543962/Sample_MNH016_N1D_E_HGT7VBGXB_R2.fastq.gz > ${aligned_reads}/SRR18543962.normal.paired.sam 2> error.log
+
+echo $ref
+echo $reads
+echo $aligned_reads
+
+
+# -----------------------------------------
+# STEP 3: Mark Duplicates and Sort - GATK
+# -----------------------------------------
+echo "STEP 3: Mark Duplicates and Sort - GATK"
+#Time consuming steps
+#To call this particular GATK, "gatk-4.5.0.0/gatk" works, not just "gatk"
+SGT18algnreads="/Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/aligned_reads_62-63" #no space
+gatk-4.5.0.0/gatk MarkDuplicatesSpark -I ${aligned_reads}/SRR18543962.normal.paired.sam -O ${aligned_reads}/SRR18543962.normal_sorted_dedup_reads.bam
+gatk-4.5.0.0/gatk MarkDuplicatesSpark -I ${aligned_reads}/SRR18543962.normal.paired.sam -O ${SGT18algnreads}/SRR18543962.normal_sorted_dedup_reads.bam
+gatk-4.5.0.0/gatk MarkDuplicatesSpark -I ${SGT18algnreads}/SRR18543962.normal.paired.sam -O ${SGT18algnreads}/SRR18543962.normal_sorted_dedup_reads.bam
+
+gatk-4.5.0.0/gatk MarkDuplicatesSpark -I ${aligned_reads}/SRR18543963.tumor.paired.sam -O ${aligned_reads}/SRR18543963.tumor_sorted_dedup_reads.bam
+gatk-4.5.0.0/gatk MarkDuplicatesSpark -I ${aligned_reads}/SRR18543963.tumor.paired.sam -O ${SGT18algnreads}/SRR18543963.tumor_sorted_dedup_reads.bam
+gatk-4.5.0.0/gatk MarkDuplicatesSpark -I ${SGT18algnreads}/SRR18543963.tumor.paired.sam -O ${SGT18algnreads}/SRR18543963.tumor_sorted_dedup_reads.bam
+
+############
+# If to use the files should be sorted first with sammtools or SortSam
+
+#this worked for the 62-63
+
+##NORMAL##
+gatk-4.5.0.0/gatk SortSam \
+    -I /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/aligned_reads_62-63/SRR18543962.normal.paired.sam \
+    -O /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/aligned_reads_62-63/SRR18543962.normal_sorted.sam \
+    --SORT_ORDER coordinate
+
+#this worked for the 62-63
+samtools sort \
+    -o /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/aligned_reads_62-63/SRR18543962.normal_sorted.sam \
+    /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/aligned_reads_62-63/SRR18543962.normal.paired.sam
+
+#this worked for the 62-63
+gatk-4.5.0.0/gatk MarkDuplicates \
+    -I /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/aligned_reads_62-63/SRR18543962.normal_sorted.sam \
+    -O /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/aligned_reads_62-63/SRR18543962.normal_sorted_dedup_reads.bam \
+    -M /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/aligned_reads_62-63/SRR18543962.dedup_metrics.txt
+
+##TUMOR##
+
+#gatk-4.5.0.0/gatk SortSam \
+#   -I /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/aligned_reads_62-63/SRR18543962.normal.paired.sam \
+#    -O /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/aligned_reads_62-63/SRR18543962.normal_sorted.sam \
+#   --SORT_ORDER coordinate
+
+#this worked for the 62-63
+samtools sort \
+    -o /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/aligned_reads_62-63/SRR18543963.tumor_sorted.sam \
+    /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/aligned_reads_62-63/SRR18543963.tumor.paired.sam
+
+#this worked for the 62-63
+gatk-4.5.0.0/gatk MarkDuplicates \
+    -I /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/aligned_reads_62-63/SRR18543963.tumor_sorted.sam \
+    -O /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/aligned_reads_62-63/SRR18543963.tumor_sorted_dedup_reads.bam \
+    -M /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/aligned_reads_62-63/SRR18543963.tumor_metrics.txt
+
+
+##############
+
+#To see what have we got, use samtools function
+samtools flagstat /Users/elena_s_kim/Documents/Mesothelioma_iMac/__06.24_local_rerun/VC/aligned_reads_60-61/SRR18543960.normal_sorted_dedup_reads.bam
+samtools flagstat Users/elena_s_kim/Documents/Mesothelioma_iMac/__06.24_local_rerun/VC/aligned_reads_60-61/SRR18543961.tumor_sorted_dedup_reads.bam
+
+samtools flagstat /Users/elena_s_kim/Documents/Mesothelioma_iMac/__06.24_local_rerun/VC/aligned_reads_60-61/SRR18543960.normal_sorted_dedup_reads.bam
+samtools flagstat Users/elena_s_kim/Documents/Mesothelioma_iMac/__06.24_local_rerun/VC/aligned_reads_60-61/SRR18543961.tumor_sorted_dedup_reads.bam
+
+
+# ----------------------------------
+# STEP 4: Base quality recalibration (BQSR)
+# ----------------------------------
+echo "STEP 4: Base quality recalibration"
+
+#normal
+# 1. build the model
+gatk-4.5.0.0/gatk BaseRecalibrator -I /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/aligned_reads_62-63/SRR18543962.normal_sorted_dedup_reads.bam -R /Users/elena_s_kim/Documents/Mesothelioma_iMac/__06.24_local_rerun/supporting_files/hg38/hg38.fa --known-sites ${known_sites} -O /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/data_62-23/recal_data.SRR18543962.normal.table
+
+#Just a reminder:
+#ref="/Users/elena_s_kim/Documents/Mesothelioma_iMac/__06.24_local_rerun/supporting_files/hg38/hg38.fa”
+#known_sites="/Users/elena_s_kim/Documents/Mesothelioma_iMac/__06.24_local_rerun/supporting_files/hg38/Homo_sapiens_assembly38.dbsnp138.vcf"
+
+
+#re-asigne aligned reads to the outer drive
+aligned_reads="/Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/aligned_reads_62-63"
+
+#re-asigne data to the outer drive
+data="/Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/data_62-23"
+
+# 2. Apply the model to adjust the base quality scores
+gatk-4.5.0.0/gatk ApplyBQSR -I ${aligned_reads}/SRR18543962.normal_sorted_dedup_reads.bam -R ${ref} --bqsr-recal-file ${data}/recal_data.SRR18543962.normal.table -O ${aligned_reads}/SRR18543960.normal_sorted_dedup_bqsr_reads.bam #the output is the ready-to-call file
+
+
+#tumor
+
+gatk-4.5.0.0/gatk BaseRecalibrator -I /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/aligned_reads_62-63/SRR18543963.tumor_sorted_dedup_reads.bam -R /Users/elena_s_kim/Documents/Mesothelioma_iMac/__06.24_local_rerun/supporting_files/hg38/hg38.fa --known-sites ${known_sites} -O /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/data_62-23/recal_data.SRR18543963.tumor.table
+
+#gatk-4.5.0.0/gatk BaseRecalibrator -I ${aligned_reads}/SRR18543963.tumor_sorted_dedup_reads.bam -R ${ref} --known-sites ${known_sites} -O ${data}/recal_data.SRR18543963.tumor.table
+
+gatk-4.5.0.0/gatk BaseRecalibrator -I ${aligned_reads}/SRR18543963.tumor_sorted_dedup_reads.bam -R /Users/elena_s_kim/Documents/Mesothelioma_iMac/__06.24_local_rerun/supporting_files/hg38/hg38.fa --known-sites /Users/elena_s_kim/Documents/Mesothelioma_iMac/__06.24_local_rerun/supporting_files/hg38/Homo_sapiens_assembly38.dbsnp138.vcf -O ${data}/recal_data.SRR18543963.tumor.table
+
+
+# 2. Apply the model to adjust the base quality scores
+#Normal
+gatk-4.5.0.0/gatk ApplyBQSR -I ${aligned_reads}/SRR18543963.tumor_sorted_dedup_reads.bam -R ${ref} --bqsr-recal-file ${data}/recal_data.tumor.table -O ${aligned_reads}/SRR18543961.tumor_sorted_dedup_bqsr_reads.bam #the output is the ready-to-call file
+#Tumor
+gatk-4.5.0.0/gatk ApplyBQSR -I ${aligned_reads}/SRR18543963.tumor_sorted_dedup_reads.bam -R ${ref} --bqsr-recal-file ${data}/recal_data.SRR18543963.tumor.table -O ${aligned_reads}/SRR18543963.tumor_sorted_dedup_bqsr_reads.bam #the output is the ready-to-call file
+
+
+# ----------------------------------------------
+# STEP 6: Call Variants - gatk haplotype caller
+# ----------------------------------------------
+echo "STEP 6: Call Variants - gatk haplotype caller"
+
+gatk-4.5.0.0/gatk HaplotypeCaller -R ${ref} -I ${aligned_reads}/SRR18543962.normal_sorted_dedup_reads.bam -O ${results}/raw_variant_normal_62.vcf
+gatk-4.5.0.0/gatk HaplotypeCaller -R ${ref} -I ${aligned_reads}/SRR18543963.tumor_sorted_dedup_reads.bam -O ${results}/raw_variant_tumor_63.vcf
+
+gatk-4.5.0.0/gatk HaplotypeCaller \
+    -R /Users/elena_s_kim/Documents/Mesothelioma_iMac/__06.24_local_rerun/supporting_files/hg38/hg38.fa \
+    -I /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/aligned_reads_62-63/SRR18543962.normal_sorted_dedup_bqsr_reads.bam \
+    -O /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/results_62-63/raw_variant_normal_62.vcf
+    
+gatk-4.5.0.0/gatk HaplotypeCaller \
+    -R /Users/elena_s_kim/Documents/Mesothelioma_iMac/__06.24_local_rerun/supporting_files/hg38/hg38.fa \
+    -I /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/aligned_reads_62-63/SRR18543963.tumor_sorted_dedup_bqsr_reads.bam \
+    -O /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/results_62-63/raw_variant_tumor_63.vcf
+    
+# extract SNPs & INDELS
+#gatk-4.5.0.0/gatk SelectVariants -R ${ref} -V ${results}/raw_variant_60_restored.vcf --select-type SNP -O ${results}/raw_snps60.vcf
+#gatk-4.5.0.0/gatk SelectVariants -R ${ref} -V ${results}/raw_variant_60_restored.vcf --select-type INDEL -O ${results}/raw_indels60.vcf
+
+
+gatk-4.5.0.0/gatk SelectVariants \
+    -R /Users/elena_s_kim/Documents/Mesothelioma_iMac/__06.24_local_rerun/supporting_files/hg38/hg38.fa -V /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/results_62-63/raw_variant_normal_62.vcf --select-type SNP -O ${results}/raw_variant_normal_SNPs62.vcf
+    
+gatk-4.5.0.0/gatk SelectVariants \
+    -R /Users/elena_s_kim/Documents/Mesothelioma_iMac/__06.24_local_rerun/supporting_files/hg38/hg38.fa \
+    -V /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/results_62-63/raw_variant_normal_62.vcf --select-type INDEL \
+    -O ${results}/raw_variant_normal_INDELs62.vcf    
+    
+    
+gatk-4.5.0.0/gatk SelectVariants -R ${ref} -V ${results}/raw_variant_60_restored.vcf --select-type INDEL -O ${results}/raw_indels60.vcf
+
+gatk-4.5.0.0/gatk SelectVariants \
+    -R /Users/elena_s_kim/Documents/Mesothelioma_iMac/__06.24_local_rerun/supporting_files/hg38/hg38.fa \
+    -V /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/results_62-63/raw_variant_tumor_63.vcf --select-type SNP \
+    -O ${results}/raw_variant_tumor_SNPs63.vcf
+    
+gatk-4.5.0.0/gatk SelectVariants \
+    -R /Users/elena_s_kim/Documents/Mesothelioma_iMac/__06.24_local_rerun/supporting_files/hg38/hg38.fa \
+    -V /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/results_62-63/raw_variant_tumor_63.vcf --select-type INDEL \
+    -O ${results}/raw_variant_tumor_INDELs63.vcf
+    
+#To call germline mutations, normal sample is used. 
+#To insure the presence of germline mutations in both normal and tumor samples
+
+# Create COPIES of the original VCF files to work with
+cp ${results}/raw_variant_normal_62.vcf ${results}/raw_variant_normal_62_copy.vcf
+cp ${results}/raw_variant_tumor_63.vcf ${results}/raw_variant_tumor_63_copy.vcf
+
+bgzip /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/results_62-63/raw_variant_normal_62_copy.vcf
+bgzip /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/results_62-63/raw_variant_tumor_63_copy.vcf
+
+tabix -p vcf /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/results_62-63/raw_variant_normal_62_copy.vcf.gz #produces /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/results_62-63/raw_variant_tumor_63_copy.vcf.gz.tbi
+tabix -p vcf /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/results_62-63/raw_variant_tumor_63_copy.vcf.gz
+
+
+bcftools isec \
+    -p isec_output/ \
+    /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/results_62-63/raw_variant_normal_62_copy.vcf.gz \
+    /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/results_62-63/raw_variant_tumor_63_copy.vcf.gz
+
+bcftools isec \
+    -p ${results}/isec_output/ \
+    /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/results_62-63/raw_variant_normal_62_copy.vcf.gz \
+    /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/results_62-63/raw_variant_tumor_63_copy.vcf.gz
+
+#isec_output/0000.vcf: Variants unique to the normal sample.
+#isec_output/0001.vcf: Variants unique to the tumor sample.
+#isec_output/0002.vcf: Variants common to both files (germline mutations).
+
+/Users/elena_s_kim/Documents/Mesothelioma_iMac/__08.12_local_rerun_62-63/annovar/
+#Copy annovar to the working directory
+~/annovar/convert2annovar.pl -format vcf4 /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/results_62-63/isec_output/validated_0002.recode.vcf > /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/results_62-63/isec_output/validated_0002.recode.avinput
+
+#(base) HSIT-C02YN1XRJV40:annovar elena_s_kim$ ~/annovar/convert2annovar.pl -format vcf4 /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/results_62-63/isec_output/0002.vcf > /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/results_62-63/isec_output/0002.avinput
+#NOTICE: Finished reading 114931 lines from VCF file
+#NOTICE: A total of 114448 locus in VCF file passed QC threshold, representing 104074 SNPs (72750 transitions and 31324 transversions) and 10554 indels/substitutions
+#NOTICE: Finished writing 104074 SNP genotypes (72750 transitions and 31324 transversions) and 10554 indels/substitutions for 1 sample
+
+
+~/annovar/table_annovar.pl /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/results_62-63/isec_output/0002.avinput humandb/ \
+-buildver hg38 \
+-out /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/results_62-63/isec_output/0002 \
+-remove \
+-protocol refGene,cytoBand,dbsnp,exac03,gnomad30 \
+-operation g,r,f,f,f \
+-nastring . \
+-vcfinput
+
+table_annovar.pl example.avinput humandb/ \
+    -buildver hg38 \
+    -out example_output \
+    -remove \
+    -protocol refGene,cytoBand,dbsnp,gnomad30 \
+    -operation g,r,f,f \
+    -nastring . \
+    -vcfinput
+
+vcftools --vcf /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/results_62-63/isec_output/0002.vcf --recode --out /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/results_62-63/isec_output/validated_0002
+
+~/annovar/table_annovar.pl /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/results_62-63/isec_output/validated_0002.recode.avinput humandb/ \
+-buildver hg38 \
+-out /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/results_62-63/isec_output/0002 \
+-remove \
+-protocol refGene \
+-operation g \
+-nastring . \
+-vcfinput
+
+#bgzip /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/results_62-63/isec_output/0002.hg38_multianno_copy.vcf
+
+#gzip /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/results_62-63/isec_output/0002.hg38_multianno_copy.vcf
+#bcftools view -v snps /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/results_62-63/isec_output/0002.hg38_multianno_copy.vcf.gz -o /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/results_62-63/isec_output/0002_snps.vcf
+#bcftools view -v indels /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/results_62-63/isec_output/0002.hg38_multianno_copy.vcf.gz -o /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/results_62-63/isec_output/0002_indels.vcf
+
+
+# Index VCF files
+bcftools index /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/results_62-63/raw_variant_normal_62_copy.vcf 
+bcftools index /Volumes/SGT_18TB/Mesothelioma_SGT_18TB/_SGT_18TB_08.12_local_rerun_62-63/VC/results_62-63/raw_variant_tumor_63_copy.vcf
+
+# Intersect VCF files to find common variants
+bcftools isec -n=2 -w1 ${results}/raw_variant_normal_62_copy.vcf ${results}/raw_variant_tumor_63_copy.vcf -Oz -o ${results}/common_variants62-63.vcf.gz
+
+bgzip -c ${results}/raw_variant_normal_62_copy > ${results}/raw_variant_normal_62_copy.vcf.gz 
+bgzip -c ${results}/raw_variant_tumor_63_copy.vcf > ${results}/raw_variant_tumor_63_copy.vcf.gz 
+# Index the compressed VCF files 
+tabix -p vcf ${results}/raw_variant_normal_62_copy.vcf.gz 
+tabix -p vcf ${results}/raw_variant_tumor_63_copy.vcf.gz
+
+# Identify germline mutations
+bcftools isec -p ${results}/isec_output -n=2 -c all ${results}/raw_variant_normal_62_copy.vcf.gz ${results}/raw_variant_tumor_63_copy.vcf.gz
+
+# Rename the output files for clarity
+mv ${results}/0002.vcf ${results}/isec_output/germline.vcf
+
