@@ -1,0 +1,25 @@
+#!/bin/bash
+
+# Define the paths to your VCF files
+NORMAL_VCF="/Volumes/SGT_18TB/Mesothelioma_SGT_18TB/Variant_calling_outputs_dltltr/variant_calling_output1/SRR18543960_61/SRR18543960_61.vcf/0000.vcf"
+TUMOR_VCF="/Volumes/SGT_18TB/Mesothelioma_SGT_18TB/Variant_calling_outputs_dltltr/variant_calling_output1/SRR18543960_61/SRR18543960_61.vcf/0001.vcf"
+
+# Extract the data from the VCF files
+bcftools query -f '%CHROM\t%POS\t%REF\t%ALT\t[%SAMPLE\t%GT]\n' $NORMAL_VCF > normal_variants.tsv
+bcftools query -f '%CHROM\t%POS\t%REF\t%ALT\t[%SAMPLE\t%GT]\n' $TUMOR_VCF > tumor_variants.tsv
+
+# Merge the extracted data
+awk 'FNR==NR {a[$1,$2,$3,$4] = $6; next} ($1,$2,$3,$4) in a {print $1, $2, $3, $4, a[$1,$2,$3,$4], $6}' OFS='\t' normal_variants.tsv tumor_variants.tsv > merged_variants.tsv
+
+# Filter for germline mutations (present in both normal and tumor, and both not '0/0')
+awk 'BEGIN {print "CHROM\tPOS\tNORMAL\tTUMOR"} NR>1 && $5!="0/0" && $6!="0/0" {print $1, $2, 1, 1}' OFS='\t' merged_variants.tsv > oncoprint_input.tsv
+
+# Convert the TSV to VCF
+awk 'BEGIN {print "##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tNORMAL\tTUMOR"} 
+NR>1 {print $1"\t"$2"\t.\t"$3"\t"$4"\t.\tPASS\t.\tGT\t"($3 != "0/0" ? "0/1" : "0/0")"\t"($4 != "0/0" ? "0/1" : "0/0")}' oncoprint_input.tsv > merged_variants.vcf
+
+# Convert the VCF to MAF using vcf2maf
+perl /Users/elena_s_kim/Documents/Mesothelioma_iMac/vcf2maf-1.6.22/vcf2maf.pl --input-vcf merged_variants.vcf --output-maf merged_variants.maf --tumor-id "Tumor_Sample" --normal-id "Normal_Sample"
+
+# Run the R script to generate the Oncoplot
+Rscript /Users/elena_s_kim/Documents/Oncoprint_06122024/create_oncoplot.R
