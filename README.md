@@ -1,1 +1,1 @@
-# WGS_Germ_Som_miut_calling
+# WGS_Germline_and_Somatic_mutations_calling
